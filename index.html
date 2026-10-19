@@ -190,6 +190,12 @@
   .sync.ok i{background:var(--ok)} .sync.busy i{background:#f0a020} .sync.off i{background:var(--red)}
   .loading{padding:22px;border:1px dashed var(--line);border-radius:16px;color:var(--muted);text-align:center;margin-bottom:14px}
   .nolink{padding:18px 20px;border-radius:14px;background:var(--amberbg);color:var(--amber);font-weight:600;margin-bottom:20px}
+  .edit label{display:block;font-size:12.5px;font-weight:700;color:var(--ink2);margin:0 0 10px}
+  .edit label span{font-weight:500;color:var(--muted)}
+  .edit input,.edit textarea{display:block;width:100%;margin-top:4px;border:1px solid var(--line);border-radius:10px;padding:9px 11px;font:inherit;font-size:14px;background:#fff;color:var(--ink);resize:vertical}
+  .edit input:focus,.edit textarea:focus{outline:2px solid #c9d6ee;border-color:#9fb4d8}
+  .btn.save{background:var(--navy);border-color:var(--navy);color:#fff}
+  .lnk.ed{color:var(--blue)}
   @media (max-width:520px){ .sync span{display:none} }
 </style>
 </head>
@@ -311,7 +317,7 @@ var API = KEYID ? 'https://script.google.com/macros/s/' + KEYID + '/exec' : '';
 function shareLink() { return location.origin + location.pathname + (KEYID ? '#k=' + KEYID : ''); }
 
 /* ───────── 상태 ───────── */
-var S = null, CUR = lsGet(LS.cur) || '듀얼타이트', FILTER = 'all', OPEN = {}, CLOSED = {}, LAST = null, Q = [], BUSY = false, PENDING_RENDER = false;
+var S = null, CUR = lsGet(LS.cur) || '듀얼타이트', FILTER = 'all', OPEN = {}, EDIT = {}, CLOSED = {}, LAST = null, Q = [], BUSY = false, PENDING_RENDER = false;
 try { Q = JSON.parse(lsGet(LS.queue) || '[]'); } catch (e) { Q = []; }
 
 function fromServer(j) {
@@ -387,7 +393,7 @@ function P() {
 /* ───────── 그리기 ───────── */
 function safeRender() {
   var a = document.activeElement;
-  if (a && a.tagName === 'INPUT' && a.value) { PENDING_RENDER = true; return; }
+  if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && (a.value || a.closest('.edit'))) { PENDING_RENDER = true; return; }
   render();
 }
 function render() {
@@ -494,13 +500,19 @@ function itemHtml(i, compact) {
     (i.due ? '<span class="due ' + u + '">' + mdw(i.due) + ' · ' + dlab(i.due) + '</span>' : '') +
     (memo ? '<span class="mc">메모 ' + memo + '</span>' : '') + '</div>';
   if (!compact && i.sub.length) h += '<ul class="subs">' + i.sub.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>';
-  if (!compact && OPEN[i.id]) {
+  if (!compact && OPEN[i.id] && EDIT[i.id]) {
+    h += '<div class="ex edit">' +
+      '<label>항목 이름<input type="text" data-et="' + esc(i.id) + '" value="' + esc(i.t) + '"></label>' +
+      '<label>설명 <span>(업체·조건 등, 이름 옆에 회색으로 보임)</span><input type="text" data-ev="' + esc(i.id) + '" value="' + esc(i.v) + '"></label>' +
+      '<label>세부 내용 <span>(한 줄에 하나씩)</span><textarea rows="' + Math.max(3, i.sub.length + 1) + '" data-es="' + esc(i.id) + '">' + esc(i.sub.join('\n')) + '</textarea></label>' +
+      '<div class="row"><button class="btn save" data-esave="' + esc(i.id) + '">저장</button><button class="lnk" data-ecancel="' + esc(i.id) + '">취소</button></div></div>';
+  } else if (!compact && OPEN[i.id]) {
     h += '<div class="ex"><ul class="ml">' + (memo ? i.memos.map(function (m, k) {
       return '<li><span>' + (m.d ? md(m.d) : '') + '</span>' + esc(m.t) + '<button data-md="' + esc(i.id) + '" data-mk="' + k + '" aria-label="메모 삭제">×</button></li>';
     }).join('') : '<li style="color:var(--muted)">아직 메모가 없습니다.</li>') + '</ul>' +
       '<div class="row"><input type="text" placeholder="진행 상황 한 줄 (예: 플러스인텍 재견적 요청함)" data-mi="' + esc(i.id) + '"><button class="btn" data-ms="' + esc(i.id) + '">메모 저장</button></div>' +
       '<div class="row" style="margin-top:8px"><span style="font-size:13px;color:var(--muted);font-weight:600">마감일</span><input type="date" value="' + (i.due || '') + '" data-dt="' + esc(i.id) + '">' +
-      '<button class="lnk" data-op="' + esc(i.id) + '">닫기</button><button class="lnk del" data-del="' + esc(i.id) + '">항목 삭제</button></div></div>';
+      '<button class="lnk ed" data-ed="' + esc(i.id) + '">내용 수정</button><button class="lnk" data-op="' + esc(i.id) + '">닫기</button><button class="lnk del" data-del="' + esc(i.id) + '">항목 삭제</button></div></div>';
   }
   return h + '</div></div>';
 }
@@ -566,9 +578,24 @@ function kakaoText() {
 }
 
 document.addEventListener('click', function (e) {
-  var t = e.target.closest('[data-ck],[data-op],[data-del],[data-ms],[data-md],[data-as],[data-un],[data-sec],[data-f],[data-p],[data-new]');
+  var t = e.target.closest('[data-ck],[data-op],[data-ed],[data-esave],[data-ecancel],[data-del],[data-ms],[data-md],[data-as],[data-un],[data-sec],[data-f],[data-p],[data-new]');
   if (!t) return;
   var d = t.dataset, it;
+  if (d.ed) {
+    EDIT[d.ed] = true; OPEN[d.ed] = true; render();
+    var ti = document.querySelector('[data-et="' + d.ed + '"]'); if (ti) { ti.focus(); ti.setSelectionRange(ti.value.length, ti.value.length); }
+    return;
+  }
+  if (d.ecancel) { EDIT[d.ecancel] = false; render(); return; }
+  if (d.esave) {
+    var id = d.esave, et = document.querySelector('[data-et="' + id + '"]'), nt = et.value.trim();
+    if (!nt) { et.focus(); return; }
+    var nv = document.querySelector('[data-ev="' + id + '"]').value.trim();
+    var ns = document.querySelector('[data-es="' + id + '"]').value.split('\n').map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+    it = find(id); it.t = nt; it.v = nv; it.sub = ns; EDIT[id] = false;
+    document.activeElement && document.activeElement.blur();
+    send({ op: 'edit', id: id, t: nt, v: nv, sub: ns.join('\n') }); render(); toast('내용을 수정했습니다'); return;
+  }
   if (d.ck) { check(d.ck); return; }
   if (d.op) { OPEN[d.op] = !OPEN[d.op]; render(); return; }
   if (d.md) { it = find(d.md); it.memos.splice(+d.mk, 1); send({ op: 'memoDel', id: it.id, i: +d.mk }); render(); return; }
@@ -601,6 +628,7 @@ document.addEventListener('change', function (e) {
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Enter') return;
   var d = e.target.dataset;
+  if (d.et || d.ev) { e.preventDefault(); document.querySelector('[data-esave="' + (d.et || d.ev) + '"]').click(); return; }
   if (d.mi) document.querySelector('[data-ms="' + d.mi + '"]').click();
   if (d.ai) document.querySelector('[data-as="' + d.ai + '"]').click();
 });
